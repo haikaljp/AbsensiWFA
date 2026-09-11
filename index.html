@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="id">
+    <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width,initial-scale=1"/>
+        <title>Rekap WFH KPU - Tampilkan per Tanggal</title>
+
+        <!-- PapaParse untuk parsing CSV -->
+        <script
+            src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+
+        <style>
+            body {
+                font-family: Tahoma, sans-serif;
+                padding: 20px;
+                font-size: 9px;
+                color: #000;
+            }
+            .header-title {
+                text-align: center;
+                font-weight: 700;
+                font-size: 18px;
+                margin-bottom: 18px;
+                line-height: 1.4;
+            }
+            .filter-area {
+                margin-bottom: 18px;
+                padding: 14px;
+                background: #f6f6f6;
+                border-radius: 6px;
+                display: flex;
+                gap: 10px;
+                align-items: center;
+                flex-wrap: wrap;
+            }
+            .filter-area label {
+                font-weight: 600;
+            }
+            .filter-area input[type="text"],
+            .filter-area input[type="date"] {
+                padding: 8px 10px;
+                font-size: 14px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                min-width: 220px;
+            }
+            .filter-area button {
+                padding: 8px 14px;
+                font-size: 14px;
+                background: #0056b3;
+                color: #fff;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+            .filter-area button.secondary {
+                background: #2d7a2d;
+            }
+            .filter-area button.ghost {
+                background: #777;
+            }
+            #status {
+                font-weight: 700;
+                color: #c00;
+                margin-left: 8px;
+            }
+            .summary {
+                margin-top: 8px;
+                font-size: 9px;
+            }
+
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                border: 1px solid #000;
+                margin-top: 12px;
+            }
+            td,
+            th {
+                border: 1px solid #000;
+                padding: 8px;
+                vertical-align: top;
+            }
+            th {
+                background: #ffcccc;
+                text-align: center;
+                font-weight: 700;
+            }
+            .center {
+                text-align: center;
+                vertical-align: top;
+            }
+            .small {
+                font-size: 9px;
+                color: #333;
+            }
+            .hidden {
+                display: none;
+            }
+            .missing {
+                background: #ffecec;
+                color: #a00;
+                font-weight: 700;
+            }
+            .present {
+                background: #e8ffe8;
+                color: #0a6;
+            }
+            .counts {
+                margin-left: 12px;
+                font-weight: 700;
+            }
+
+            @media (max-width:900px) {
+                .filter-area {
+                    flex-direction: column;
+                    align-items: flex-start;
+                }
+            }
+        </style>
+    </head>
+    <body>
+
+        <div class="header-title">
+            DAFTAR HADIR HARIAN PELAKSANAAN<br>
+            <i>WORK FROM HOME</i>
+            (WFH)<br>
+            SEKRETARIAT KOMISI PEMILIHAN UMUM KOTA MOJOKERTO
+        </div>
+
+        <div class="filter-area">
+            <label for="inputTanggal">
+                <strong>Pilih/Ketik Tanggal</strong>
+            </label>
+            <input
+                type="text"
+                id="inputTanggal"
+                placeholder="Contoh: 8 Mei 2026  atau 01/09/2025 atau 2026-05-08">
+            <button id="btnTampilkan">Tampilkan Data</button>
+            <button
+                id="btnRefresh"
+                class="secondary"
+                title="Ambil ulang data dari spreadsheet">Refresh Data</button>
+            <button
+                id="btnHideMissing"
+                class="ghost"
+                title="Toggle highlight pegawai belum absen">Toggle Highlight</button>
+            <span id="status">Memuat data...</span>
+            <div class="summary" id="summary"></div>
+        </div>
+
+        <table id="tabelWfh" class="hidden" aria-live="polite">
+            <thead>
+                <tr>
+                    <th rowspan="3" style="width:5%;">NO.</th>
+                    <th rowspan="3" style="width:35%;">NAMA</th>
+                    <th rowspan="3" style="width:15%;">GOL.</th>
+                    <th colspan="2">TANGGAL</th>
+                </tr>
+                <tr>
+                    <th colspan="2" id="headerTanggal">...</th>
+                </tr>
+                <tr>
+                    <th style="width:22%;">jam mulai WFH</th>
+                    <th style="width:23%;">jam selesai WFH</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+
+        <script>
+            /************************************************************************
+     *  CONFIG: CSV export links (dari Google Sheets yang Anda berikan)
+     *  Format: https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}
+     *
+     *  Jika sheet tidak dapat diakses publik, pastikan share -> Anyone with link -> Viewer
+     ************************************************************************/
+            const urlSheetDatang = 'https://docs.google.com/spreadsheets/d/1Jrd0btaZMv2-Gn0_YCWclJI7khI11BlXxQTQZp' +
+                    'r0eto/export?format=csv&gid=518945256';
+            const urlSheetPulang = 'https://docs.google.com/spreadsheets/d/1EqNLiMs_UwTsWNy_Mr6w702VlMtL-iHT208Bxc' +
+                    'RCJpc/export?format=csv&gid=182046482';
+
+            /************************************************************************
+     *  DATABASE PEGAWAI (statis di HTML)
+     ************************************************************************/
+            const dbPegawai = [
+                {
+                    nama: "WIRATMOKO IMAN SANTOSO, S.IP",
+                    nip: "19750224 200811 1 001",
+                    jabatan: "Sekretaris",
+                    gol: "Pembina (IV/a)"
+                }, {
+                    nama: "SAFITRI NURDIN, S.E., M.H",
+                    nip: "19751008 200912 1 002",
+                    jabatan: "Kepala Sub Bagian Perencanaan, Data Dan Informasi",
+                    gol: "Pembina (IV/a)"
+                }, {
+                    nama: "DIKRILIA A. RIZKI ERTIKA ADI, S.Sos",
+                    nip: "19861210 200912 2 003",
+                    jabatan: "Kepala Sub Bagian Keuangan, Umum Dan Logistik",
+                    gol: "Pembina (IV/a)"
+                }, {
+                    nama: "NOOR IFAH, S.H., M.IP",
+                    nip: "19810323 200912 2 002",
+                    jabatan: "Kepala Sub Bagian Partisipasi, Hubungan Masyarakat Dan Sumber Daya Manusia",
+                    gol: "Pembina (IV/a)"
+                }, {
+                    nama: "MOKHAMMAD SAMSUL ARIF, S.Sos., M.IP",
+                    nip: "19820819 201010 1 012",
+                    jabatan: "Kepala Sub Bagian Teknis Penyelenggaraan Pemilihan dan Hukum",
+                    gol: "Penata Tk. I (III/d)"
+                }, {
+                    nama: "ANDI SETIAWAN, S.Kom., M.T",
+                    nip: "19880322 201012 1 007",
+                    jabatan: "Pranata Keuangan APBN Penyelia",
+                    gol: "Penata Tk. I (III/d)"
+                }, {
+                    nama: "LILY PRASETYANI, A.Md",
+                    nip: "19860209 200910 2 001",
+                    jabatan: "Penelaah Teknis Kebijakan",
+                    gol: "Penata (III/c)"
+                }, {
+                    nama: "IRWAN SUSANTO, A.Md",
+                    nip: "19880220 200910 1 001",
+                    jabatan: "Penata Kelola Sistem dan Teknologi Informasi",
+                    gol: "Penata (III/c)"
+                }, {
+                    nama: "SEPTI TRI YANINGRUM, S.H",
+                    nip: "19960902 202012 2 017",
+                    jabatan: "Penata Kelola Pemilihan Umum Ahli Pertama",
+                    gol: "Penata Muda Tingkat I (III/b)"
+                }, {
+                    nama: "ACHMAT KHOIRUL, S.Kom",
+                    nip: "19920821 202506 1 002",
+                    jabatan: "Penata Kelola Sistem dan Teknologi Informasi",
+                    gol: "Penata Muda (III/a)"
+                }, {
+                    nama: "NOOR DWI INDAH LESTARI, S.Kom",
+                    nip: "19950221 202506 2 006",
+                    jabatan: "Penata Kelola Sistem dan Teknologi Informasi",
+                    gol: "Penata Muda (III/a)"
+                }, {
+                    nama: "DANANG BANGUN KUSUMA NEGARA, S.H",
+                    nip: "19940212 202506 1 007",
+                    jabatan: "Penyusun Materi Hukum dan Perundang-Undangan",
+                    gol: "Penata Muda (III/a)"
+                }, {
+                    nama: "ALQORI AJI ALAMSYAH, S.Kom",
+                    nip: "19970617 202506 1 006",
+                    jabatan: "Penata Kelola Sistem dan Teknologi Informasi",
+                    gol: "Penata Muda (III/a)"
+                }, {
+                    nama: "NANDA PRABU ANGGANATA, S.Kom",
+                    nip: "20000302 202506 1 006",
+                    jabatan: "Penata Kelola Sistem dan Teknologi Informasi",
+                    gol: "Penata Muda (III/a)"
+                }, {
+                    nama: "ELITA KUMALASARI, S.T",
+                    nip: "20010917 202506 2 011",
+                    jabatan: "Penyusun Materi Hukum dan Perundang-Undangan",
+                    gol: "Penata Muda (III/a)"
+                }, {
+                    nama: "DWI SEBTI LAILY AGUSTINI, S.E",
+                    nip: "19860823 202421 2 012",
+                    jabatan: "Ahli Pertama - Penata Kelola Pemilu",
+                    gol: "Penata Muda (IX)"
+                }, {
+                    nama: "KHOIRUL IMAM THOHARI, S.Kom",
+                    nip: "19860704 202421 1 015",
+                    jabatan: "Ahli Pertama - Pranata Komputer",
+                    gol: "Penata Muda (IX)"
+                }, {
+                    nama: "PURBO RAHAYU, S.H",
+                    nip: "19930910 202421 2 070",
+                    jabatan: "Ahli Pertama - Penata Kelola Pemilu",
+                    gol: "Penata Muda (IX)"
+                }, {
+                    nama: "ANITAWATI, S.E",
+                    nip: "19820221 202421 2 012",
+                    jabatan: "Penata Kelola Pemilihan Umum Ahli Pertama",
+                    gol: "Penata Muda (IX)"
+                }, {
+                    nama: "BUDI SANTOSO",
+                    nip: "19820426 202521 1 014",
+                    jabatan: "Pengadministrasi Perkantoran",
+                    gol: "Pengatur Muda (V)"
+                }, {
+                    nama: "EDWIN HENDRIK KURNIAWAN",
+                    nip: "19960316 202521 1 011",
+                    jabatan: "Pengadministrasi Perkantoran",
+                    gol: "Pengatur Muda (V)"
+                }, {
+                    nama: "BOEDI SANTOSO",
+                    nip: "19721220 202521 1 005",
+                    jabatan: "Operator Layanan Operasional",
+                    gol: "Pengatur Muda (V)"
+                }, {
+                    nama: "HARI PURWANTO",
+                    nip: "19761216 202521 1 007",
+                    jabatan: "Operator Layanan Operasional",
+                    gol: "Pengatur Muda (V)"
+                }, {
+                    nama: "MUHAMAD YASIN",
+                    nip: "19760222 202521 1 007",
+                    jabatan: "Operator Layanan Operasional",
+                    gol: "Pengatur Muda (V)"
+                }, {
+                    nama: "MOKHAMAT SAIFUDIN",
+                    nip: "19800630 202521 1 014",
+                    jabatan: "Operator Layanan Operasional",
+                    gol: "Pengatur Muda (V)"
+                }, {
+                    nama: "BAGUS ARIE PRAKASA",
+                    nip: "19930811 202521 1 012",
+                    jabatan: "Pengadministrasi Perkantoran",
+                    gol: "Pengatur Muda (V)"
+                }, {
+                    nama: "ARDICKI DWI PRASETYA",
+                    nip: "20010414 202521 1 008",
+                    jabatan: "Pengadministrasi Perkantoran",
+                    gol: "Pengatur Muda (V)"
+                }, {
+                    nama: "HAIKAL JAHAR PRAMESTI, S.Kom",
+                    nip: "-",
+                    jabatan: "Tenaga Administrasi",
+                    gol: "-"
+                }
+            ];
+
+            let dataMentahDatang = [];
+            let dataMentahPulang = [];
+
+            const statusEl = document.getElementById('status');
+            const tabelEl = document.getElementById('tabelWfh');
+            const tableBody = document.getElementById('tableBody');
+            const headerTanggal = document.getElementById('headerTanggal');
+            const inputTanggal = document.getElementById('inputTanggal');
+            const btnTampilkan = document.getElementById('btnTampilkan');
+            const btnRefresh = document.getElementById('btnRefresh');
+            const btnHideMissing = document.getElementById('btnHideMissing');
+            const summaryEl = document.getElementById('summary');
+
+            const bulanIndo = {
+                'januari': 1,
+                'februari': 2,
+                'maret': 3,
+                'april': 4,
+                'mei': 5,
+                'juni': 6,
+                'juli': 7,
+                'agustus': 8,
+                'september': 9,
+                'oktober': 10,
+                'november': 11,
+                'desember': 12
+            };
+
+            function parseToCanonical(dateStr) {
+                if (!dateStr) 
+                    return null;
+                const s = String(dateStr).trim();
+                const maybeDateOnly = s.split(' ')[0];
+
+                const dm = maybeDateOnly.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+                if (dm) {
+                    let d = parseInt(dm[1], 10);
+                    let m = parseInt(dm[2], 10);
+                    let y = parseInt(dm[3], 10);
+                    if (y < 100) 
+                        y += 2000;
+                    return `${y
+                        .toString()
+                        .padStart(4, '0')}-${String(m)
+                        .padStart(2, '0')}-${String(d)
+                        .padStart(2, '0')}`;
+                }
+
+                const iso = maybeDateOnly.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+                if (iso) {
+                    const y = iso[1],
+                        m = iso[2].padStart(2, '0'),
+                        d = iso[3].padStart(2, '0');
+                    return `${y}-${m}-${d}`;
+                }
+
+                const parts = maybeDateOnly
+                    .split(/[\s\-]+/)
+                    .filter(Boolean);
+                if (parts.length >= 2) {
+                    let day = null,
+                        month = null,
+                        year = null;
+                    if (parts.length === 3) {
+                        day = parts[0];
+                        month = parts[1].toLowerCase();
+                        year = parts[2];
+                    } else if (parts.length === 2) {
+                        day = parts[0];
+                        month = parts[1].toLowerCase();
+                        year = (new Date()).getFullYear();
+                    }
+                    if (day && month) {
+                        const monthKey = month.toLowerCase();
+                        let mnum = null;
+                        for (const k of Object.keys(bulanIndo)) {
+                            if (k.startsWith(monthKey)) {
+                                mnum = bulanIndo[k];
+                                break;
+                            }
+                        }
+                        if (mnum) {
+                            const d = parseInt(day, 10);
+                            const y = parseInt(year, 10);
+                            if (!isNaN(d) && !isNaN(y)) {
+                                return `${y
+                                    .toString()
+                                    .padStart(4, '0')}-${String(mnum)
+                                    .padStart(2, '0')}-${String(d)
+                                    .padStart(2, '0')}`;
+                            }
+                        }
+                    }
+                }
+
+                const dt = new Date(s);
+                if (!isNaN(dt.getTime())) {
+                    const y = dt.getFullYear();
+                    const m = (dt.getMonth() + 1)
+                        .toString()
+                        .padStart(2, '0');
+                    const d = dt
+                        .getDate()
+                        .toString()
+                        .padStart(2, '0');
+                    return `${y}-${m}-${d}`;
+                }
+
+                return null;
+            }
+
+            function normalizeName(n) {
+                if (!n) 
+                    return '';
+                
+                // Menghapus bagian setelah koma untuk menghilangkan gelar (misal: ", S.IP") dan
+                // mengubah ke huruf kecil untuk menangani Title Case/Uppercase
+                const nameWithoutTitle = String(n).split(',')[0];
+                return nameWithoutTitle
+                    .trim()
+                    .replace(/\s+/g, ' ')
+                    .toLowerCase();
+            }
+
+            async function fetchGoogleSheets() {
+                statusEl.style.color = '#000';
+                statusEl.textContent = 'Sedang mengambil data dari server...';
+                try {
+                    if (!urlSheetDatang || !urlSheetPulang) {
+                        statusEl.textContent = 'URL CSV belum dikonfigurasi.';
+                        return;
+                    }
+
+                    const [resDatang, resPulang] = await Promise.all(
+                        [fetch(urlSheetDatang), fetch(urlSheetPulang)]
+                    );
+
+                    if (!resDatang.ok || !resPulang.ok) {
+                        throw new Error('Gagal mengambil CSV. Periksa link dan akses publik.');
+                    }
+
+                    const csvDatang = await resDatang.text();
+                    const csvPulang = await resPulang.text();
+
+                    const parsedDatang = Papa.parse(csvDatang, {
+                        header: true,
+                        skipEmptyLines: true
+                    });
+                    const parsedPulang = Papa.parse(csvPulang, {
+                        header: true,
+                        skipEmptyLines: true
+                    });
+
+                    dataMentahDatang = parsedDatang.data || parsedDatang;
+                    dataMentahPulang = parsedPulang.data || parsedPulang;
+
+                    statusEl.style.color = 'green';
+                    statusEl.textContent = 'Data siap. Masukkan tanggal lalu klik Tampilkan Data.';
+                } catch (err) {
+                    console.error(err);
+                    statusEl.style.color = '#c00';
+                    statusEl.textContent = 'Gagal memuat data dari Spreadsheet. Periksa koneksi dan URL CSV.';
+                }
+            }
+
+            function findRecordFor(rowArray, tanggalCanonical, namaNormalized) {
+                if (!rowArray || !Array.isArray(rowArray)) 
+                    return null;
+                
+                if (rowArray.length > 0 && typeof rowArray[0] === 'object' && !Array.isArray(rowArray[0])) {
+                    const possibleDateKeys = Object
+                        .keys(rowArray[0])
+                        .filter(k => /tanggal|date|tgl/i.test(k));
+                    const possibleNameKeys = Object
+                        .keys(rowArray[0])
+                        .filter(k => /nama|name/i.test(k));
+                    for (const r of rowArray) {
+                        const rawTanggal = possibleDateKeys.length
+                            ? r[possibleDateKeys[0]]
+                            : Object.values(r)[0];
+                        const rawNama = possibleNameKeys.length
+                            ? r[possibleNameKeys[0]]
+                            : Object.values(r)[1];
+                        const canonical = parseToCanonical(rawTanggal);
+                        if (!canonical) 
+                            continue;
+                        if (canonical === tanggalCanonical && normalizeName(rawNama) === namaNormalized) {
+                            return r;
+                        }
+                    }
+                    return null;
+                }
+
+                for (const r of rowArray) {
+                    if (!Array.isArray(r)) 
+                        continue;
+                    let rawTanggal = null;
+                    let rawNama = null;
+                    for (let i = 0; i < r.length; i++) {
+                        if (parseToCanonical(r[i])) {
+                            rawTanggal = r[i];
+                            break;
+                        }
+                    }
+                    if (r.length > 1) 
+                        rawNama = r[1];
+                    const canonical = parseToCanonical(rawTanggal);
+                    if (!canonical) 
+                        continue;
+                    if (canonical === tanggalCanonical && normalizeName(rawNama) === namaNormalized) {
+                        return r;
+                    }
+                }
+                return null;
+            }
+
+            function extractJamFromRecord(record) {
+                if (!record) 
+                    return {jam: '-', keterangan: '-'};
+                
+                if (typeof record === 'object' && !Array.isArray(record)) {
+                    const jamKey = Object
+                        .keys(record)
+                        .find(k => /jam|time|mulai|selesai|start|end/i.test(k));
+                    const keteranganKey = Object
+                        .keys(record)
+                        .find(k => /renc|hasil|kegiatan|keterangan|pekerjaan/i.test(k));
+                    const jamVal = jamKey
+                        ? (record[jamKey] || '-')
+                        : '-';
+                    const ketVal = keteranganKey
+                        ? (record[keteranganKey] || '-')
+                        : '-';
+                    return {
+                        jam: jamVal || '-',
+                        keterangan: ketVal || '-'
+                    };
+                }
+
+                if (Array.isArray(record)) {
+                    const candidates = [2, 4, 3];
+                    let jamVal = '-';
+                    for (const i of candidates) {
+                        if (record[i] && /[:]/.test(String(record[i]))) {
+                            jamVal = record[i];
+                            break;
+                        }
+                    }
+                    if (jamVal === '-' && record[2]) 
+                        jamVal = record[2];
+                    const ket = record[3] || record[4] || record[5] || '-';
+                    return {
+                        jam: jamVal || '-',
+                        keterangan: ket || '-'
+                    };
+                }
+
+                return {jam: '-', keterangan: '-'};
+            }
+
+            function formatHeaderDate(tanggalCanonical, rawInput) {
+                if (!tanggalCanonical) 
+                    return rawInput;
+                const [y, m, d] = tanggalCanonical.split('-');
+                const monthNames = [
+                    'Jan',
+                    'Feb',
+                    'Mar',
+                    'Apr',
+                    'Mei',
+                    'Jun',
+                    'Jul',
+                    'Agu',
+                    'Sep',
+                    'Okt',
+                    'Nov',
+                    'Des'
+                ];
+                return `${parseInt(d, 10)} ${monthNames[parseInt(m, 10) - 1]} ${y}`;
+            }
+
+            function filterDataAndRender() {
+                const tanggalInput = inputTanggal
+                    .value
+                    .trim();
+                if (!tanggalInput) {
+                    alert(
+                        'Harap masukkan tanggal terlebih dahulu (contoh: 8 Mei 2026 atau 01/09/2025).'
+                    );
+                    return;
+                }
+
+                const tanggalCanonical = parseToCanonical(tanggalInput);
+                headerTanggal.innerText = formatHeaderDate(tanggalCanonical, tanggalInput);
+
+                tableBody.innerHTML = '';
+                let hadirCount = 0;
+                let belumCount = 0;
+
+                dbPegawai.forEach((pegawai, idx) => {
+                    const namaNorm = normalizeName(pegawai.nama);
+                    let recDatang = findRecordFor(dataMentahDatang, tanggalCanonical, namaNorm);
+                    let recPulang = findRecordFor(dataMentahPulang, tanggalCanonical, namaNorm);
+
+                    if (!recDatang && !tanggalCanonical) {
+                        recDatang = (dataMentahDatang || []).find(r => {
+                            if (typeof r === 'object' && !Array.isArray(r)) {
+                                const dateKey = Object
+                                    .keys(r)
+                                    .find(k => /tanggal|date|tgl/i.test(k));
+                                const nameKey = Object
+                                    .keys(r)
+                                    .find(k => /nama|name/i.test(k));
+                                if (!dateKey || !nameKey) 
+                                    return false;
+                                return String(r[dateKey]).trim() === tanggalInput && normalizeName(r[nameKey]) === namaNorm;
+                            } else if (Array.isArray(r)) {
+                                return r.some(c => String(c).trim() === tanggalInput) && normalizeName(r[1]) === namaNorm;
+                            }
+                            return false;
+                        }) || null;
+                    }
+                    if (!recPulang && !tanggalCanonical) {
+                        recPulang = (dataMentahPulang || []).find(r => {
+                            if (typeof r === 'object' && !Array.isArray(r)) {
+                                const dateKey = Object
+                                    .keys(r)
+                                    .find(k => /tanggal|date|tgl/i.test(k));
+                                const nameKey = Object
+                                    .keys(r)
+                                    .find(k => /nama|name/i.test(k));
+                                if (!dateKey || !nameKey) 
+                                    return false;
+                                return String(r[dateKey]).trim() === tanggalInput && normalizeName(r[nameKey]) === namaNorm;
+                            } else if (Array.isArray(r)) {
+                                return r.some(c => String(c).trim() === tanggalInput) && normalizeName(r[1]) === namaNorm;
+                            }
+                            return false;
+                        }) || null;
+                    }
+
+                    const datangInfo = extractJamFromRecord(recDatang);
+                    const pulangInfo = extractJamFromRecord(recPulang);
+
+                    const jamMulai = recDatang
+                        ? (String(datangInfo.jam).trim() || '-')
+                        : '-';
+                    const kegiatanPagi = recDatang
+                        ? (String(datangInfo.keterangan).trim() || 'Belum mengisi absen mulai')
+                        : 'Belum mengisi absen mulai';
+                    const jamSelesai = recPulang
+                        ? (String(pulangInfo.jam).trim() || '-')
+                        : '-';
+                    const kegiatanSore = recPulang
+                        ? (String(pulangInfo.keterangan).trim() || 'Belum mengisi absen selesai')
+                        : 'Belum mengisi absen selesai';
+
+                    if (recDatang || recPulang) 
+                        hadirCount++;
+                    else 
+                        belumCount++;
+                    
+                    const trAtas = document.createElement('tr');
+                    trAtas.innerHTML = `
+          <td rowspan="2" class="center">${idx + 1}</td>
+          <td rowspan="2">
+            <strong>${pegawai.nama}</strong><br>
+            <span class="small">NIP. ${pegawai.nip}</span><br>
+            <span class="small">${pegawai.jabatan}</span>
+          </td>
+          <td rowspan="2" class="center small">${pegawai.gol}</td>
+          <td class="center ${recDatang
+                        ? 'present'
+                        : 'missing'}">${jamMulai}</td>
+          <td class="center ${recPulang
+                            ? 'present'
+                            : 'missing'}">${jamSelesai}</td>
+        `;
+
+                    const trBawah = document.createElement('tr');
+                    trBawah.innerHTML = `
+          <td>${kegiatanPagi}</td>
+          <td>${kegiatanSore}</td>
+        `;
+
+                    tableBody.appendChild(trAtas);
+                    tableBody.appendChild(trBawah);
+                });
+
+                summaryEl.innerHTML = `Jumlah pegawai: <strong>${dbPegawai.length}</strong> &nbsp; Hadir (ada minimal 1 absen): <strong>${hadirCount}</strong> &nbsp; Belum absen: <strong>${belumCount}</strong>`;
+                tabelEl
+                    .classList
+                    .remove('hidden');
+                tabelEl.style.display = 'table';
+            }
+
+            btnTampilkan.addEventListener('click', filterDataAndRender);
+            btnRefresh.addEventListener('click', fetchGoogleSheets);
+            btnHideMissing.addEventListener('click', () => {
+                // toggle highlight class on table
+                const cells = tableBody.querySelectorAll('td.missing');
+                cells.forEach(c => c.classList.toggle('hidden'));
+            });
+
+            window.addEventListener('load', () => {
+                fetchGoogleSheets();
+            });
+
+            inputTanggal.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    filterDataAndRender();
+                }
+            });
+        </script>
+    </body>
+</html>
